@@ -10,13 +10,12 @@ private:
     double high;
     double low;
     double close;
-    double spread;
 
 public:
     Candle() {}
 
-    Candle(datetime pTime, double pOpen, double pHigh, double pLow, double pClose, double pSpread)
-        : time(pTime), open(pOpen), high(pHigh), low(pLow), close(pClose), spread(pSpread) {}
+    Candle(datetime pTime, double pOpen, double pHigh, double pLow, double pClose)
+        : time(pTime), open(pOpen), high(pHigh), low(pLow), close(pClose) {}
 
     Candle(const Candle &candle) {
         this.time = candle.time;
@@ -24,7 +23,6 @@ public:
         this.high = candle.high;
         this.low = candle.low;
         this.close = candle.close;
-        this.spread = candle.spread;
     }
 
     datetime getTime() const {
@@ -47,10 +45,6 @@ public:
         return close;
     }
 
-    double getSpread() const {
-        return spread;
-    }
-
     CandleType getType() const {
         if (open == close) {
             return DOJI;
@@ -61,13 +55,12 @@ public:
 
     string toString() const {
         return StringFormat(
-            "Candle(time=%s, open=%s, high=%s, low=%s, close=%s, spread=%s)",
+            "Candle(time=%s, open=%s, high=%s, low=%s, close=%s)",
             TimeToString(time),
             DoubleToString(open),
             DoubleToString(high),
             DoubleToString(low),
-            DoubleToString(close),
-            DoubleToString(spread)
+            DoubleToString(close)
         );
     }
 };

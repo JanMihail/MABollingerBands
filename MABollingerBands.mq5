@@ -1,20 +1,20 @@
 #include "Candle.mqh"
 #include "Logger.mqh"
+#include "NewBarDetector.mqh"
 #include <Trade/Trade.mqh>
 
-input int MA_FAST_PERIOD = 15;
-input int MA_SLOW_PERIOD = 55;
+input ulong EXPERT_MAGIC = 777777; // Expert Identifier
+input double LOT = 0.01;           // Volume
+input int MIN_WIN_RATE = 1;        // Minimum WinRate
 
-input int BANDS_PERIOD = 20;
-input int BANDS_SHIFT = 0;
-input double BANDS_DEVIATION = 2.0;
-
-input int BANDS_STOP_PERIOD = 20;
-input int BANDS_STOP_SHIFT = 0;
-input double BANDS_STOP_DEVIATION = 3.0;
-
-input double LOT = 0.01;
-input ulong EXPERT_MAGIC = 777777;
+input int MA_FAST_PERIOD = 15;           // Moving Average Fast Period
+input int MA_SLOW_PERIOD = 55;           // Moving Average Slow Period
+input int BANDS_PERIOD = 20;             // Bollinger Bands Period
+input int BANDS_SHIFT = 0;               // Bollinger Bands Shift
+input double BANDS_DEVIATION = 2.0;      // Bollinger Bands Deviation
+input int BANDS_STOP_PERIOD = 20;        // Bollinger Bands StopLoss Period
+input int BANDS_STOP_SHIFT = 0;          // Bollinger Bands StopLoss Shift
+input double BANDS_STOP_DEVIATION = 3.0; // Bollinger Bands StopLoss Deviation
 
 // Indicator handles
 int maFastHandle;
@@ -29,6 +29,9 @@ double bandsBuffer[];
 double bandsStopBuffer[];
 
 // State variables
+NewBarDetector *newBarDetector;
+double maFast;
+double maSlow;
 enum TrendDirection { UP, DOWN } trendDirection;
 
 double bandsUpper;
@@ -39,12 +42,12 @@ double bandsStopUpper;
 double bandsStopMiddle;
 double bandsStopLower;
 
-Candle currentCandle;
-
 bool positionExist = false;
 
 int OnInit() {
     Logger::Info("Initialize...");
+
+    newBarDetector = new NewBarDetector(PERIOD_CURRENT);
 
     // Moving Average
     maFastHandle = iMA(Symbol(), PERIOD_CURRENT, MA_FAST_PERIOD, 0, MODE_EMA, PRICE_CLOSE);
@@ -66,17 +69,20 @@ void OnDeinit(const int reason) {
     IndicatorRelease(maSlowHandle);
     IndicatorRelease(bandsHandle);
     IndicatorRelease(bandsStopHandle);
+    delete newBarDetector;
 
     Logger::Info("Deinitialize complete! ReasonCode: " + IntegerToString(reason));
 }
 
 void OnTick() {
-    updateTrendDirectionState();
-    updateBollingerBandsState();
-    updateBollingerBandsStopState();
-    updateCurrentBarState();
+    if (newBarDetector.update()) {
+        updateTrendDirectionState();
+        updateBollingerBandsState();
+        updateBollingerBandsStopState();
+        findEntryPointAndTrade();
+    }
+
     updatePositionsState();
-    findEntryPointAndTrade();
 }
 
 void updateTrendDirectionState() {
@@ -94,15 +100,17 @@ void updateTrendDirectionState() {
         return;
     }
 
-    Logger::Debug("MA Fast = " + DoubleToString(maFastBuffer[0]));
-    Logger::Debug("MA Slow = " + DoubleToString(maSlowBuffer[0]));
+    maFast = maFastBuffer[0];
+    maSlow = maSlowBuffer[0];
+    Logger::Debug("MA Fast = " + DoubleToString(maFast));
+    Logger::Debug("MA Slow = " + DoubleToString(maSlow));
 
-    trendDirection = maFastBuffer[0] > maSlowBuffer[0] ? UP : DOWN;
+    trendDirection = maFast > maSlow ? UP : DOWN;
     Logger::Debug("Trend Direction = " + EnumToString(trendDirection));
 }
 
 void updateBollingerBandsState() {
-    int res = CopyBuffer(bandsHandle, 0, 0, 1, bandsBuffer);
+    int res = CopyBuffer(bandsHandle, 0, 1, 1, bandsBuffer);
 
     if (res < 0) {
         Logger::PrintLastError(__FUNCSIG__, __LINE__);
@@ -111,7 +119,7 @@ void updateBollingerBandsState() {
 
     bandsMiddle = bandsBuffer[0];
 
-    res = CopyBuffer(bandsHandle, 1, 0, 1, bandsBuffer);
+    res = CopyBuffer(bandsHandle, 1, 1, 1, bandsBuffer);
 
     if (res < 0) {
         Logger::PrintLastError(__FUNCSIG__, __LINE__);
@@ -120,7 +128,7 @@ void updateBollingerBandsState() {
 
     bandsUpper = bandsBuffer[0];
 
-    res = CopyBuffer(bandsHandle, 2, 0, 1, bandsBuffer);
+    res = CopyBuffer(bandsHandle, 2, 1, 1, bandsBuffer);
 
     if (res < 0) {
         Logger::PrintLastError(__FUNCSIG__, __LINE__);
@@ -167,19 +175,6 @@ void updateBollingerBandsStopState() {
     Logger::Debug("Bands Stop Middle = " + DoubleToString(bandsStopMiddle));
 }
 
-void updateCurrentBarState() {
-    currentCandle = Candle(
-        iTime(Symbol(), PERIOD_CURRENT, 0),
-        iOpen(Symbol(), PERIOD_CURRENT, 0),
-        iHigh(Symbol(), PERIOD_CURRENT, 0),
-        iLow(Symbol(), PERIOD_CURRENT, 0),
-        iClose(Symbol(), PERIOD_CURRENT, 0),
-        iSpread(Symbol(), PERIOD_CURRENT, 0) * 0.00001
-    );
-
-    Logger::Debug("Current Candle: " + currentCandle.toString());
-}
-
 void updatePositionsState() {
     if (!positionExist) {
         return;
@@ -204,7 +199,9 @@ void findEntryPointAndTrade() {
 }
 
 void findEntryPointBuy() {
-    if (currentCandle.getLow() <= bandsLower) {
+    Candle lastCandle = newBarDetector.getLastDetectedCandle();
+
+    if (lastCandle.getClose() <= bandsLower && availableWinRate()) {
         CTrade trade;
         bool res = trade.Buy(LOT, Symbol(), 0.0, bandsStopLower, bandsMiddle);
 
@@ -218,7 +215,9 @@ void findEntryPointBuy() {
 }
 
 void findEntryPointSell() {
-    if (currentCandle.getHigh() >= bandsUpper) {
+    Candle lastCandle = newBarDetector.getLastDetectedCandle();
+
+    if (lastCandle.getClose() >= bandsUpper && availableWinRate()) {
         CTrade trade;
         bool res = trade.Sell(LOT, Symbol(), 0.0, bandsStopUpper, bandsMiddle);
 
@@ -228,5 +227,25 @@ void findEntryPointSell() {
         }
 
         positionExist = true;
+    }
+}
+
+bool availableWinRate() {
+    if (MIN_WIN_RATE == 0) {
+        return true;
+    }
+
+    if (trendDirection == UP) {
+        double curPrice = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+        double tpSize = bandsMiddle - curPrice;
+        double slSize = curPrice - bandsStopLower;
+
+        return tpSize >= slSize * MIN_WIN_RATE;
+    } else {
+        double curPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+        double tpSize = curPrice - bandsMiddle;
+        double slSize = bandsStopUpper - curPrice;
+
+        return tpSize >= slSize * MIN_WIN_RATE;
     }
 }
