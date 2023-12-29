@@ -5,7 +5,7 @@
 
 input ulong EXPERT_MAGIC = 777777; // Expert Identifier
 input double LOT = 0.01;           // Volume
-input int MIN_WIN_RATE = 1;        // Minimum WinRate
+input int MIN_WIN_RATE = 0;        // Minimum WinRate
 
 input int MA_FAST_PERIOD = 15;           // Moving Average Fast Period
 input int MA_SLOW_PERIOD = 55;           // Moving Average Slow Period
